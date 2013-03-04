@@ -1,9 +1,12 @@
 package de.nerox.forge.wicket;
 
+import java.io.IOException;
 import java.util.List;
 
 import javax.inject.Inject;
 
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.jboss.forge.parser.xml.Node;
 import org.jboss.forge.parser.xml.XMLParser;
 import org.jboss.forge.project.Project;
@@ -37,30 +40,89 @@ public class Wicket implements Plugin {
 	private DependencyFacet dependencyFacet;
 
 	@SetupCommand(help = "sets up Apache Wicket for your project")
-	public void setup(PipeOut out) {
+	public void setup(PipeOut out) throws Exception {
 		dependencyFacet = project.getFacet(DependencyFacet.class);
 
 		installWicketCoreDependency(out);
-		// setupWebXml();
+		setupWebXml();
 	}
 
-	private void setupWebXml() {
-		FileResource<?> webXmlResource = getWebXml();
-		Node webXml = XMLParser.parse(webXmlResource.getResourceInputStream());
-
-		Node blablub = webXml.getOrCreate("blablub");
-
-		webXmlResource.setContents(XMLParser.toXMLString(blablub));
-	}
-
-	private FileResource<?> getWebXml() {
+	private void setupWebXml() throws Exception {
 		WebResourceFacet webResourceFacet = project.getFacet(WebResourceFacet.class);
 		FileResource<?> webXml = webResourceFacet.getWebResource("WEB-INF/web.xml");
 		if (!webXml.exists()) {
-			webXml.createNewFile();
-			// TODO web.xml content
+			createWebXmlFromTemplate(webXml);
 		}
-		return webXml;
+		addWicketNodesToWebXml(webXml);
+	}
+
+	private void createWebXmlFromTemplate(FileResource<?> webXml) throws IOException {
+		webXml.createNewFile();
+		webXml.setContents(getWebXmlTemplateContent());
+	}
+
+	private String getWebXmlTemplateContent() throws IOException {
+		return IOUtils.toString(this.getClass().getClassLoader().getResourceAsStream("web.xml"));
+	}
+
+	private void addWicketNodesToWebXml(FileResource<?> webXmlResource) throws Exception {
+		String projectName = project.getProjectRoot().toString();
+		Node webXml = XMLParser.parse(webXmlResource.getResourceInputStream());
+
+		addDisplayName(projectName, webXml);
+		addContextParam(webXml);
+		addFilter(projectName, webXml);
+
+		webXmlResource.setContents(XMLParser.toXMLInputStream(webXml));
+	}
+
+	private void addFilter(String projectName, Node webXml) {
+		List<Node> contextParams = webXml.get("filter");
+		for (Node contextParam : contextParams) {
+			Node paramName = contextParam.getSingle("filter-class");
+			if (paramName.getText().equals("org.apache.wicket.protocol.http.WicketFilter")) {
+				return;
+			}
+		}
+
+		Node filter = webXml.createChild("filter");
+		filter.createChild("filter-name").text("wicket." + projectName);
+		filter.createChild("filter-class").text("org.apache.wicket.protocol.http.WicketFilter");
+		Node initParam = filter.createChild("init-param");
+		initParam.createChild("param-name").text("applicationClassName");
+		// TODO
+		initParam.createChild("param-value").text("TODO");
+
+		addFilterMapping(projectName, webXml);
+	}
+
+	private void addFilterMapping(String projectName, Node webXml) {
+		Node filterMapping = webXml.createChild("filter-mapping");
+		filterMapping.createChild("filter-name").text("wicket." + projectName);
+		filterMapping.createChild("url-pattern").text("/*");
+	}
+
+	private void addContextParam(Node webXml) {
+		List<Node> contextParams = webXml.get("context-param");
+		for (Node contextParam : contextParams) {
+			Node paramName = contextParam.getSingle("param-name");
+			if (paramName.getText().equals("configuration")) {
+				return;
+			}
+		}
+
+		Node contextParam = webXml.createChild("context-param");
+		contextParam.createChild("description").text(
+				"Configures Apache Wickets to either run in develoment or in deployment mode");
+		contextParam.createChild("param-name").text("configuration");
+		contextParam.createChild("param-value").text("development");
+	}
+
+	private void addDisplayName(String projectName, Node webXml) {
+		Node displayName = webXml.getOrCreate("display-name");
+		if (StringUtils.isBlank(displayName.getText())) {
+			displayName.text(projectName);
+		}
 	}
 
 	private void installWicketCoreDependency(PipeOut out) {
